@@ -24,6 +24,7 @@ from megatron.utils import is_rank_0
 from deepspeed.accelerator import get_accelerator
 import deepspeed
 
+from mpi4py import MPI
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
                         ignore_unknown_args=False, allow_no_cuda=False):
@@ -183,10 +184,27 @@ def setup_deepspeed_random_and_activation_checkpointing(args):
     mpu.get_cuda_rng_tracker = deepspeed.checkpointing.get_cuda_rng_tracker
     mpu.model_parallel_cuda_manual_seed = deepspeed.checkpointing.model_parallel_cuda_manual_seed
 
+def _set_env_variables(args):
+    # Call the init process
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    world_size = comm.Get_size()
+    master_addr = args.master_addr
+    
+    proc_name = MPI.Get_processor_name()
+    all_procs = comm.allgather(proc_name)
+    local_rank = sum([i == proc_name for i in all_procs[:rank]])
+    os.environ['RANK'] = str(rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['LOCAL_RANK'] = str(local_rank)
+    os.environ['MASTER_ADDR'] = master_addr
+    os.environ['MASTER_PORT'] = str(29500)
+    print("world_size, rank, master_addr, local_rank:", world_size, rank, master_addr, local_rank)
 
 def _initialize_distributed():
     """Initialize torch.distributed and core model parallel."""
     args = get_args()
+    _set_env_variables(args)
     device_count = get_accelerator().device_count()
     if torch.distributed.is_initialized():
 
@@ -209,15 +227,22 @@ def _initialize_distributed():
                 args.local_rank = device
 
             get_accelerator().set_device(device) # only do so when device_count > 0
-
+    print("args values:", args)
     # Call the init process
     if args.deepspeed or args.ds_inference:
         deepspeed.init_distributed()
     else:
+        print("before init_process_group:" )
+        '''
         torch.distributed.init_process_group(
             backend=args.distributed_backend,
             world_size=args.world_size, rank=args.rank,
             timeout=timedelta(minutes=args.distributed_timeout_minutes))
+        '''
+        torch.distributed.init_process_group(
+            backend=args.distributed_backend,
+            world_size=args.world_size,
+            timeout=timedelta(minutes=10))
 
     # Set the tensor model-parallel, pipeline model-parallel, and
     # data-parallel communicators.

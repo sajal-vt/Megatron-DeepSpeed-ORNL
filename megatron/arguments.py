@@ -16,6 +16,8 @@ from tools.retro.utils import get_args_path as get_retro_args_path
 
 from megatron.core.transformer import TransformerConfig
 
+from mpi4py import MPI
+
 def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     """Parse all arguments."""
     parser = argparse.ArgumentParser(description='Megatron-LM Arguments',
@@ -60,9 +62,11 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     args.ds_pipeline_enabled = not args.no_pipeline_parallel
 
     # Args from environment
-    args.rank = int(os.getenv('RANK', '0'))
-    args.world_size = int(os.getenv("WORLD_SIZE", '1'))
-
+    #args.rank = int(os.getenv('RANK', '0'))
+    #args.world_size = int(os.getenv("WORLD_SIZE", '1'))
+    comm = MPI.COMM_WORLD
+    args.rank = comm.Get_rank()
+    args.world_size = comm.Get_size()
     return args
 
 def validate_args(args, defaults={}):
@@ -626,6 +630,8 @@ def _add_network_size_args(parser):
                        help='Untie embeddings and output weights.'),
     group.add_argument('--embedding-weights-in-fp32', action='store_true',
                        help='Cast word embedding weights to fp32 before embedding fwd.'),
+    group.add_argument('--master-addr', type=str, help='Master address provided as input')
+
     return parser
 
 
