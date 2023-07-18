@@ -102,6 +102,7 @@ export OMP_NUM_THREADS=1
 #time srun -u -n$ranks_total -c 2 --gpus-per-task=$gpus_per_rank --gpu-bind=closest bash -c "
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 time srun -u -n$ranks_total -c2 --ntasks-per-node=8 --gpus-per-node=8 --gpu-bind=closest bash -c "
+source export_DDP_vars.sh
 python pretrain_gpt.py \
        $GPT_ARGS \
        $OUTPUT_ARGS \

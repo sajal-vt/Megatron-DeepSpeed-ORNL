@@ -528,7 +528,7 @@ class ColumnParallelLinear(torch.nn.Module):
                 f"Disabling sequence parallel."
             )
             self.sequence_parallel = False
-
+        config.gradient_accumulation_fusion = False # Modified by SD
         if config.gradient_accumulation_fusion and not _grad_accum_fusion_available:
             raise RuntimeError(
                 "ColumnParallelLinear was called with gradient_accumulation_fusion set "
