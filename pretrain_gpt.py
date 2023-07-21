@@ -325,19 +325,6 @@ def git_ds_info():
         git_branch = "unknown"
     print(f'**** Git info for Megatron: git_hash={git_hash} git_branch={git_branch} ****')
 
-def get_data(train_val_test_num_samples):
-    import datasets
-    from transformers import GPT2Tokenizer
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")#("GPT2-XL/", local_files_only=True, truncation=True)
-    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-
-    dataset = datasets.load_from_disk("/lustre/orion/world-shared/stf218/sajal/owt-new/")
-    dataset_dict = dataset.train_test_split(test_size=0.3)
-    train_dataset, val_dataset = dataset_dict["train"], dataset_dict["test"]
-    train_dataset = train_dataset.map(lambda examples: tokenizer(examples['text']), batched=True)
-    val_dataset = val_dataset.map(lambda examples: tokenizer(examples['text']), batched=True)
-
-    return train_dataset, val_dataset, val_dataset
 
 if __name__ == "__main__":
     git_ds_info()
