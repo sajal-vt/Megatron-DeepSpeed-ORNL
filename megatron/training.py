@@ -1103,125 +1103,142 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     if args.random_ltd:
         assert model[0].random_ltd_enabled()
         args.random_ltd_layer_num = model[0].random_ltd_scheduler.get_random_ltd_layer_num()
-        
-    while iteration < args.train_iters and (args.train_tokens is None or \
-        args.consumed_train_tokens < args.train_tokens):
-        update_num_microbatches(args.consumed_train_samples)
-        if args.deepspeed:
-            # inform deepspeed of any batch size changes
-            global_batch_size = mpu.get_data_parallel_world_size() * \
-                                args.micro_batch_size * \
-                                get_num_microbatches()
-            model[0].set_train_batch_size(global_batch_size)
+   
+    import torch
+    import torch.profiler
+    from torch.profiler import tensorboard_trace_handler
+    from torch.profiler import profile, record_function, ProfilerActivity
+    with profile(
+        #activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        profile_memory=True,
+        with_flops=True,
+        schedule=torch.profiler.schedule(
+            wait=10,
+            warmup=2,
+            active=2,
+            repeat=1),
+        on_trace_ready=tensorboard_trace_handler(args.tensorboard_dir + "-traces"),
+        with_stack=False
+    ) as p:
+        while iteration < args.train_iters and (args.train_tokens is None or \
+            args.consumed_train_tokens < args.train_tokens):
+            update_num_microbatches(args.consumed_train_samples)
+            if args.deepspeed:
+                # inform deepspeed of any batch size changes
+                global_batch_size = mpu.get_data_parallel_world_size() * \
+                                    args.micro_batch_size * \
+                                    get_num_microbatches()
+                model[0].set_train_batch_size(global_batch_size)
 
-        if args.curriculum_learning_legacy and not args.no_pipeline_parallel:
-            args.curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
-                    args.iteration + 1)
-        args.curr_iteration = iteration
-        loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
-            train_step(forward_step_func,
-                       train_data_iterator,
-                       model,
-                       optimizer,
-                       opt_param_scheduler,
-                       config)
-        iteration += 1
-        args.iteration = iteration
-        new_samples = mpu.get_data_parallel_world_size() * \
-                                       args.micro_batch_size * \
-                                       get_num_microbatches()
-        args.consumed_train_samples += new_samples
-        # This actual_seq_length is used for actual consumed tokens calculation, flops calculation, and logging.
-        args.actual_seq_length = args.seq_length
-        if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
-            args.actual_seq_length = args.curriculum_seqlen
-        if args.random_ltd:
-            args.random_ltd_reserved_length = model[0].random_ltd_scheduler.get_current_seq()
-            if args.random_ltd_reserved_length < args.actual_seq_length:
-                args.actual_seq_length = (args.actual_seq_length * (args.num_layers - args.random_ltd_layer_num) + args.random_ltd_reserved_length * args.random_ltd_layer_num) // args.num_layers
-        if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
-            if hasattr(args, 'data_efficiency_curriculum_learning_numel'):
-                act_mbsz = args.data_efficiency_curriculum_learning_numel / args.curriculum_seqlen
-                act_token = act_mbsz * args.actual_seq_length
-                args.consumed_train_tokens += mpu.get_data_parallel_world_size() * \
-                        get_num_microbatches() * act_token
+            if args.curriculum_learning_legacy and not args.no_pipeline_parallel:
+                args.curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
+                        args.iteration + 1)
+            args.curr_iteration = iteration
+            loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+                train_step(forward_step_func,
+                           train_data_iterator,
+                           model,
+                           optimizer,
+                           opt_param_scheduler,
+                           config)
+            p.step()
+            iteration += 1
+            args.iteration = iteration
+            new_samples = mpu.get_data_parallel_world_size() * \
+                                           args.micro_batch_size * \
+                                           get_num_microbatches()
+            args.consumed_train_samples += new_samples
+            # This actual_seq_length is used for actual consumed tokens calculation, flops calculation, and logging.
+            args.actual_seq_length = args.seq_length
+            if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
+                args.actual_seq_length = args.curriculum_seqlen
+            if args.random_ltd:
+                args.random_ltd_reserved_length = model[0].random_ltd_scheduler.get_current_seq()
+                if args.random_ltd_reserved_length < args.actual_seq_length:
+                    args.actual_seq_length = (args.actual_seq_length * (args.num_layers - args.random_ltd_layer_num) + args.random_ltd_reserved_length * args.random_ltd_layer_num) // args.num_layers
+            if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
+                if hasattr(args, 'data_efficiency_curriculum_learning_numel'):
+                    act_mbsz = args.data_efficiency_curriculum_learning_numel / args.curriculum_seqlen
+                    act_token = act_mbsz * args.actual_seq_length
+                    args.consumed_train_tokens += mpu.get_data_parallel_world_size() * \
+                            get_num_microbatches() * act_token
+                else:
+                    args.consumed_train_tokens += new_samples * args.actual_seq_length
             else:
                 args.consumed_train_tokens += new_samples * args.actual_seq_length
-        else:
-            args.consumed_train_tokens += new_samples * args.actual_seq_length
         
-        # Logging.
-        if args.deepspeed:
-            if hasattr(model[0].optimizer, 'cur_scale'):
-                loss_scale = model[0].optimizer.cur_scale
+            # Logging.
+            if args.deepspeed:
+                if hasattr(model[0].optimizer, 'cur_scale'):
+                    loss_scale = model[0].optimizer.cur_scale
+                else:
+                    loss_scale = None
             else:
-                loss_scale = None
-        else:
-            loss_scale = optimizer.get_loss_scale().item()
-        params_norm = None
-        if args.log_params_norm:
-            params_norm = calc_params_l2_norm(model)
-        report_memory_flag = training_log(loss_dict, total_loss_dict,
-                                          optimizer.param_groups[0]['lr'],
-                                          iteration, loss_scale,
-                                          report_memory_flag, skipped_iter,
-                                          grad_norm, params_norm, num_zeros_in_grad,
-                                          model, optimizer)
+                loss_scale = optimizer.get_loss_scale().item()
+            params_norm = None
+            if args.log_params_norm:
+                params_norm = calc_params_l2_norm(model)
+            report_memory_flag = training_log(loss_dict, total_loss_dict,
+                                              optimizer.param_groups[0]['lr'],
+                                              iteration, loss_scale,
+                                              report_memory_flag, skipped_iter,
+                                              grad_norm, params_norm, num_zeros_in_grad,
+                                              model, optimizer)
 
-        # Autoresume
-        if args.adlr_autoresume and \
-           (iteration % args.adlr_autoresume_interval == 0):
-            check_adlr_autoresume_termination(iteration, model, optimizer,
+            # Autoresume
+            if args.adlr_autoresume and \
+                (iteration % args.adlr_autoresume_interval == 0):
+                check_adlr_autoresume_termination(iteration, model, optimizer,
                                               opt_param_scheduler)
 
-        # Evaluation
-        if args.eval_interval and iteration % args.eval_interval == 0 and \
-           args.do_valid:
-            prefix = 'iteration {}'.format(iteration)
-            evaluate_and_print_results(prefix, forward_step_func,
+            # Evaluation
+            if args.eval_interval and iteration % args.eval_interval == 0 and \
+                args.do_valid:
+                prefix = 'iteration {}'.format(iteration)
+                evaluate_and_print_results(prefix, forward_step_func,
                                        valid_data_iterator, model,
                                        iteration, process_non_loss_data_func,
                                        config, False)
 
-        # Checkpointing
-        saved_checkpoint = False
-        if args.exit_signal_handler:
-            signal_handler = get_signal_handler()
-            if any(signal_handler.signals_received()):
-                save_checkpoint_and_time(iteration, model, optimizer,
-                                         opt_param_scheduler)
-                print_datetime('exiting program after receiving SIGTERM.')
-                sys.exit()
-
-        if args.save and args.save_interval and \
-           iteration % args.save_interval == 0:
-            save_checkpoint_and_time(iteration, model, optimizer,
-                                     opt_param_scheduler)
-            saved_checkpoint = True
-
-        # Exiting based on duration
-        if args.exit_duration_in_mins:
-            train_time = (time.time() - _TRAIN_START_TIME) / 60.0
-            done_cuda = get_accelerator().IntTensor(
-                [train_time > args.exit_duration_in_mins])
-            torch.distributed.all_reduce(
-                done_cuda, op=torch.distributed.ReduceOp.MAX)
-            done = done_cuda.item()
-            if done:
-                if not saved_checkpoint:
+            # Checkpointing
+            saved_checkpoint = False
+            if args.exit_signal_handler:
+                signal_handler = get_signal_handler()
+                if any(signal_handler.signals_received()):
                     save_checkpoint_and_time(iteration, model, optimizer,
                                              opt_param_scheduler)
-                print_datetime('exiting program after {} minutes'.format(train_time))
-                sys.exit()
+                    print_datetime('exiting program after receiving SIGTERM.')
+                    sys.exit()
 
-        # Exiting based on iterations
-        if args.exit_interval and iteration % args.exit_interval == 0:
-            if args.save and not saved_checkpoint:
+            if args.save and args.save_interval and \
+                iteration % args.save_interval == 0:
                 save_checkpoint_and_time(iteration, model, optimizer,
                                          opt_param_scheduler)
-            torch.distributed.barrier()
-            print_datetime('exiting program at iteration {}'.format(iteration))
-            sys.exit()
+                saved_checkpoint = True
+
+            # Exiting based on duration
+            if args.exit_duration_in_mins:
+                train_time = (time.time() - _TRAIN_START_TIME) / 60.0
+                done_cuda = get_accelerator().IntTensor(
+                    [train_time > args.exit_duration_in_mins])
+                torch.distributed.all_reduce(
+                    done_cuda, op=torch.distributed.ReduceOp.MAX)
+                done = done_cuda.item()
+                if done:
+                    if not saved_checkpoint:
+                        save_checkpoint_and_time(iteration, model, optimizer,
+                                                 opt_param_scheduler)
+                    print_datetime('exiting program after {} minutes'.format(train_time))
+                    sys.exit()
+
+            # Exiting based on iterations
+            if args.exit_interval and iteration % args.exit_interval == 0:
+                if args.save and not saved_checkpoint:
+                    save_checkpoint_and_time(iteration, model, optimizer,
+                                         opt_param_scheduler)
+                torch.distributed.barrier()
+                print_datetime('exiting program at iteration {}'.format(iteration))
+                sys.exit()
 
 
     return iteration
