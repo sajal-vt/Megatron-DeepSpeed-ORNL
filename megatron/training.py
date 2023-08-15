@@ -49,6 +49,9 @@ from deepspeed.compression.compress import init_compression, redundancy_clean
 from deepspeed.runtime.data_pipeline.data_routing.helper import convert_to_random_ltd
 from megatron.model.transformer import ParallelTransformerLayer
 
+
+from pyrsmi import rocml
+
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
     torch.distributed.barrier()
@@ -1118,6 +1121,9 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             args.curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
                     args.iteration + 1)
         args.curr_iteration = iteration
+
+        rocml.smi_initialize()
+
         loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
             train_step(forward_step_func,
                        train_data_iterator,
@@ -1125,6 +1131,13 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        optimizer,
                        opt_param_scheduler,
                        config)
+
+
+        print("iteration ",iteration,"rank ",torch.distributed.get_rank(), "utilization rate ",rocml.smi_get_device_utilization(torch.cuda.current_device()))
+
+        rocml.smi_shutdown()
+
+
         iteration += 1
         args.iteration = iteration
         new_samples = mpu.get_data_parallel_world_size() * \
