@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -A STF218
+#SBATCH -A med106
 #SBATCH -J gpt175b_megatron
 #SBATCH -o logs/gpt175b_megatron_24N-%j.o
 #SBATCH -e logs/gpt175b_megatron_24N-%j.e
@@ -9,7 +9,7 @@
 #SBATCH -N 24
 
 set +x
-source /lustre/orion/world-shared/stf218/sajal/miniconda3-frontier/bin/activate
+source ~/conda/etc/profile.d/conda.sh
 conda activate /lustre/orion/world-shared/stf218/sajal/TORCH2/env-py310-rccl-megatron-new
 #env-py310-rccl-megatron
 
@@ -21,7 +21,7 @@ module load rocm/5.4.0
 export ROCM_HOME=/opt/rocm-5.4.0
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
-export NCCL_DEBUG=INFO
+#export NCCL_DEBUG=INFO
 # export settings
 export TORCH_EXTENSIONS_DIR=$PWD/deepspeed
 export HF_HOME=$PWD/hfdata
@@ -43,10 +43,10 @@ echo "ROCM_HOME=/opt/rocm-5.4.0" >> .deepspeed_env
 
 
 #export NCCL_DEBUG=INFO
-export FI_CXI_ATS=0
-export LD_LIBRARY_PATH=/opt/rocm-5.4.0/rccl/build:/lustre/orion/world-shared/stf218/sajal/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.2.0/lib64/:/opt/rocm-5.4.0/lib
+#export FI_CXI_ATS=0
+#export LD_LIBRARY_PATH=/opt/rocm-5.4.0/rccl/build:/lustre/orion/world-shared/stf218/sajal/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.2.0/lib64/:/opt/rocm-5.4.0/lib
 #export FI_LOG_LEVEL=info
-export NCCL_NET_GDR_LEVEL=3
+#export NCCL_NET_GDR_LEVEL=3
 
 
 scontrol show hostnames $SLURM_NODELIST > job.node.list
@@ -113,7 +113,7 @@ export OMP_NUM_THREADS=2
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 time srun -u -n$ranks_total -c2 --ntasks-per-node=8 --gpus-per-node=8 --gpu-bind=closest bash -c "
 source export_DDP_vars.sh 
-python pretrain_gpt_owt3.py \
+python pretrain_gpt.py \
        $GPT_ARGS \
        --save $CHECKPOINT_PATH \
        --master-addr=$MASTER_ADDR \
