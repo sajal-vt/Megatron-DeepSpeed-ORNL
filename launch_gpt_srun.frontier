@@ -9,7 +9,7 @@
 #SBATCH -N 4
 
 set +x
-source /lustre/orion/world-shared/stf218/sajal/miniconda3-frontier/bin/activate
+source /lustre/orion/world-shared/stf218/sajal/miniconda3/bin/activate
 conda activate /lustre/orion/world-shared/stf218/sajal/TORCH2/env-py310-rccl-megatron-new
 #env-py310-rccl-megatron
 
