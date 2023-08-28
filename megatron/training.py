@@ -1122,7 +1122,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     args.iteration + 1)
         args.curr_iteration = iteration
 
-        rocml.smi_initialize()
 
         loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
             train_step(forward_step_func,
@@ -1131,11 +1130,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        optimizer,
                        opt_param_scheduler,
                        config)
-
-
-        print("iteration ",iteration,"rank ",torch.distributed.get_rank(), "utilization rate ",rocml.smi_get_device_utilization(torch.cuda.current_device()))
-
-        rocml.smi_shutdown()
 
 
         iteration += 1
