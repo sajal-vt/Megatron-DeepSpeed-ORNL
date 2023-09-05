@@ -70,7 +70,7 @@ export CHECKPOINT_PATH=checkpoints/gpt2_345m
 export VOCAB_FILE=gpt2-vocab.json
 export MERGE_FILE=gpt2-merges.txt
 #export DATA_PATH=/gpfs/alpine/world-shared/stf218/sajal/ptprofile/megatron/Megatron-LM/owt-data/openwebtext_train_text_document #gptdata/gpttext_article_document #my-gpt2_text_document
-export DATA_PATH=../gptdata/gpttext_article_document
+export DATA_PATH=/lustre/orion/world-shared/stf218/sajal/mtds/gptdata/gpttext_article_document
 
 export GPT_ARGS="--tensor-model-parallel-size 8 \
           --pipeline-model-parallel-size 2 \
@@ -113,7 +113,9 @@ python pretrain_gpt_deepspeed.py \
        --tensorboard-dir logs/profiles-with-zero-0 \
        --deepspeed \
        --zero-stage 0 \
-       --deepspeed_config ds_config.json
+       --deepspeed_config ds_config.json \
+       --deepspeed-activation-checkpointing \
+       --checkpoint-activations
 "
       # --master-addr=$MASTER_ADDR
 
