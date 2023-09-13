@@ -199,32 +199,33 @@ def pretrain(train_valid_test_dataset_provider,
                             train_data_iterator, valid_data_iterator,
                             process_non_loss_data_func)
 
-        print_datetime('after training is done')
-        # Clean the model
-        if args.compression_training:
-            model = [redundancy_clean(model[0], args.deepspeed_config, mpu)]
+    #    print_datetime('after training is done')
+    #    # Clean the model
+    #    if args.compression_training:
+    #        model = [redundancy_clean(model[0], args.deepspeed_config, mpu)]
 
-        if args.save and iteration != 0:
-            save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
-    else:
-        print_rank_0('skipping training (--skip-train is on) ...')
+    #    if args.save and iteration != 0:
+    #        save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
+    #else:
+    #    print_rank_0('skipping training (--skip-train is on) ...')
 
-        iteration = args.iteration
+    #    iteration = args.iteration
 
-    config = core_transformer_config_from_args(args)
-    if args.do_valid:
-        prefix = f'iteration {iteration} on {args.eval_iters * args.global_batch_size}-sample draw from validation set'
-        evaluate_and_print_results(prefix, forward_step_func,
-                                   valid_data_iterator, model,
-                                   iteration, process_non_loss_data_func, config,
-                                   verbose=True, write_to_tensorboard=not args.skip_train)
+    ##DEEPHYPER_REMOVE
+    #config = core_transformer_config_from_args(args)
+    #if args.do_valid:
+    #    prefix = f'iteration {iteration} on {args.eval_iters * args.global_batch_size}-sample draw from validation set'
+    #    evaluate_and_print_results(prefix, forward_step_func,
+    #                               valid_data_iterator, model,
+    #                               iteration, process_non_loss_data_func, config,
+    #                               verbose=True, write_to_tensorboard=not args.skip_train)
 
-    if args.do_test:
-        prefix = f'iteration {iteration} on {args.eval_iters * args.global_batch_size}-sample draw from test set'
-        evaluate_and_print_results(prefix, forward_step_func,
-                                   test_data_iterator, model,
-                                   iteration, process_non_loss_data_func, config,
-                                   verbose=True, write_to_tensorboard=not args.skip_train, test=True)
+    #if args.do_test:
+    #    prefix = f'iteration {iteration} on {args.eval_iters * args.global_batch_size}-sample draw from test set'
+    #    evaluate_and_print_results(prefix, forward_step_func,
+    #                               test_data_iterator, model,
+    #                               iteration, process_non_loss_data_func, config,
+    #                               verbose=True, write_to_tensorboard=not args.skip_train, test=True)
 
 
 def update_train_iters(args):
@@ -1104,22 +1105,163 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         assert model[0].random_ltd_enabled()
         args.random_ltd_layer_num = model[0].random_ltd_scheduler.get_random_ltd_layer_num()
    
-    import torch
-    import torch.profiler
-    from torch.profiler import tensorboard_trace_handler
-    from torch.profiler import profile, record_function, ProfilerActivity
-    with profile(
-        #activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        profile_memory=True,
-        with_flops=True,
-        schedule=torch.profiler.schedule(
-            wait=10,
-            warmup=2,
-            active=2,
-            repeat=1),
-        on_trace_ready=tensorboard_trace_handler(args.tensorboard_dir + "-traces"),
-        with_stack=False
-    ) as p:
+    sv_int = 0
+    loss_list = []
+    if args.PROFILE:
+        if is_last_rank():
+            print("DOING PROFILE", flush=True)
+        import torch
+        import torch.profiler
+        from torch.profiler import tensorboard_trace_handler
+        from torch.profiler import profile, record_function, ProfilerActivity
+        with profile(
+            #activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            profile_memory=True,
+            with_flops=True,
+            schedule=torch.profiler.schedule(
+                wait=10,
+                warmup=2,
+                active=2,
+                repeat=1),
+            on_trace_ready=tensorboard_trace_handler(args.tensorboard_dir + "-traces"),
+            with_stack=False
+        ) as p:
+            while iteration < args.train_iters and (args.train_tokens is None or \
+                args.consumed_train_tokens < args.train_tokens):
+                update_num_microbatches(args.consumed_train_samples)
+                if args.deepspeed:
+                    # inform deepspeed of any batch size changes
+                    global_batch_size = mpu.get_data_parallel_world_size() * \
+                                        args.micro_batch_size * \
+                                        get_num_microbatches()
+                    model[0].set_train_batch_size(global_batch_size)
+
+                if args.curriculum_learning_legacy and not args.no_pipeline_parallel:
+                    args.curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
+                            args.iteration + 1)
+                args.curr_iteration = iteration
+                loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+                    train_step(forward_step_func,
+                               train_data_iterator,
+                               model,
+                               optimizer,
+                               opt_param_scheduler,
+                               config)
+                p.step()
+                iteration += 1
+                args.iteration = iteration
+                new_samples = mpu.get_data_parallel_world_size() * \
+                                               args.micro_batch_size * \
+                                               get_num_microbatches()
+                args.consumed_train_samples += new_samples
+                # This actual_seq_length is used for actual consumed tokens calculation, flops calculation, and logging.
+                args.actual_seq_length = args.seq_length
+                if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
+                    args.actual_seq_length = args.curriculum_seqlen
+                if args.random_ltd:
+                    args.random_ltd_reserved_length = model[0].random_ltd_scheduler.get_current_seq()
+                    if args.random_ltd_reserved_length < args.actual_seq_length:
+                        args.actual_seq_length = (args.actual_seq_length * (args.num_layers - args.random_ltd_layer_num) + args.random_ltd_reserved_length * args.random_ltd_layer_num) // args.num_layers
+                if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
+                    if hasattr(args, 'data_efficiency_curriculum_learning_numel'):
+                        act_mbsz = args.data_efficiency_curriculum_learning_numel / args.curriculum_seqlen
+                        act_token = act_mbsz * args.actual_seq_length
+                        args.consumed_train_tokens += mpu.get_data_parallel_world_size() * \
+                                get_num_microbatches() * act_token
+                    else:
+                        args.consumed_train_tokens += new_samples * args.actual_seq_length
+                else:
+                    args.consumed_train_tokens += new_samples * args.actual_seq_length
+            
+                # Logging.
+                if args.deepspeed:
+                    if hasattr(model[0].optimizer, 'cur_scale'):
+                        loss_scale = model[0].optimizer.cur_scale
+                    else:
+                        loss_scale = None
+                else:
+                    loss_scale = optimizer.get_loss_scale().item()
+                params_norm = None
+                if args.log_params_norm:
+                    params_norm = calc_params_l2_norm(model)
+                report_memory_flag = training_log(loss_dict, total_loss_dict,
+                                                  optimizer.param_groups[0]['lr'],
+                                                  iteration, loss_scale,
+                                                  report_memory_flag, skipped_iter,
+                                                  grad_norm, params_norm, num_zeros_in_grad,
+                                                  model, optimizer)
+                if is_last_rank():
+                    loss_list.append(loss_dict['lm loss'].detach().cpu().numpy())
+
+                # Autoresume
+                if args.adlr_autoresume and \
+                    (iteration % args.adlr_autoresume_interval == 0):
+                    check_adlr_autoresume_termination(iteration, model, optimizer,
+                                                  opt_param_scheduler)
+
+                # Evaluation
+                if args.eval_interval and iteration % args.eval_interval == 0 and \
+                    args.do_valid:
+                    prefix = 'iteration {}'.format(iteration)
+                    evaluate_and_print_results(prefix, forward_step_func,
+                                           valid_data_iterator, model,
+                                           iteration, process_non_loss_data_func,
+                                           config, False)
+
+                # Checkpointing
+                saved_checkpoint = False
+                if args.exit_signal_handler:
+                    signal_handler = get_signal_handler()
+                    if any(signal_handler.signals_received()):
+                        save_checkpoint_and_time(iteration, model, optimizer,
+                                                 opt_param_scheduler)
+                        print_datetime('exiting program after receiving SIGTERM.')
+                        sys.exit()
+
+                if args.save and args.save_interval and \
+                    iteration % args.save_interval == 0:
+                    save_checkpoint_and_time(iteration, model, optimizer,
+                                             opt_param_scheduler)
+                    saved_checkpoint = True
+                    import pickle
+                    loss_list_dict = {"loss_list": loss_list}
+                    if is_last_rank():
+                        #with open('saved_dictionary_flash_nonperf_'+str(sv_int)+'.pkl', 'wb') as f:
+                        #with open('saved_dictionary_'+str(sv_int)+'.pkl', 'wb') as f:
+                        with open('saved_dictionary_flash_perf_'+str(sv_int)+'.pkl', 'wb') as f:
+                            pickle.dump(loss_list_dict, f)
+                    sv_int = sv_int+1
+
+                # Exiting based on duration
+                if args.exit_duration_in_mins:
+                    train_time = (time.time() - _TRAIN_START_TIME) / 60.0
+                    done_cuda = get_accelerator().IntTensor(
+                        [train_time > args.exit_duration_in_mins])
+                    torch.distributed.all_reduce(
+                        done_cuda, op=torch.distributed.ReduceOp.MAX)
+                    done = done_cuda.item()
+                    if done:
+                        if not saved_checkpoint:
+                            save_checkpoint_and_time(iteration, model, optimizer,
+                                                     opt_param_scheduler)
+                        print_datetime('exiting program after {} minutes'.format(train_time))
+                        sys.exit()
+
+                # Exiting based on iterations
+                if args.exit_interval and iteration % args.exit_interval == 0:
+                    if args.save and not saved_checkpoint:
+                        save_checkpoint_and_time(iteration, model, optimizer,
+                                             opt_param_scheduler)
+                    torch.distributed.barrier()
+                    print_datetime('exiting program at iteration {}'.format(iteration))
+                    sys.exit()
+
+
+        return iteration
+
+    else:
+        if is_last_rank():
+            print("NOT DOING PROFILE", flush=True)
         while iteration < args.train_iters and (args.train_tokens is None or \
             args.consumed_train_tokens < args.train_tokens):
             update_num_microbatches(args.consumed_train_samples)
@@ -1141,7 +1283,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                            optimizer,
                            opt_param_scheduler,
                            config)
-            p.step()
             iteration += 1
             args.iteration = iteration
             new_samples = mpu.get_data_parallel_world_size() * \
@@ -1184,6 +1325,9 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                                               report_memory_flag, skipped_iter,
                                               grad_norm, params_norm, num_zeros_in_grad,
                                               model, optimizer)
+            #DEEPHYPER_REMOVE
+            if is_last_rank():
+                loss_list.append(loss_dict['lm loss'].detach().cpu().numpy())
 
             # Autoresume
             if args.adlr_autoresume and \
@@ -1200,6 +1344,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                                        iteration, process_non_loss_data_func,
                                        config, False)
 
+            #DEEPHYPER_REMOVE
             # Checkpointing
             saved_checkpoint = False
             if args.exit_signal_handler:
@@ -1210,11 +1355,21 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     print_datetime('exiting program after receiving SIGTERM.')
                     sys.exit()
 
+            #DEEPHYPER_REMOVE
             if args.save and args.save_interval and \
                 iteration % args.save_interval == 0:
                 save_checkpoint_and_time(iteration, model, optimizer,
                                          opt_param_scheduler)
                 saved_checkpoint = True
+                import pickle
+                loss_list_dict = {"loss_list": loss_list}
+                if is_last_rank():
+                    #with open('saved_dictionary_flash_nonperf_'+str(sv_int)+'.pkl', 'wb') as f:
+                    #with open('saved_dictionary_'+str(sv_int)+'.pkl', 'wb') as f:
+                    #with open('saved_dictionary_flash_perf_'+str(sv_int)+'.pkl', 'wb') as f:
+                    with open('saved_dictionary_rebuild_'+str(sv_int)+'.pkl', 'wb') as f:
+                        pickle.dump(loss_list_dict, f)
+                sv_int = sv_int+1
 
             # Exiting based on duration
             if args.exit_duration_in_mins:

@@ -1,0 +1,93 @@
+#!/bin/bash
+
+#SBATCH -A STF006
+#SBATCH -J test-srun-subset
+#SBATCH -o logs/test-srun-subset-N8-%j.o
+#SBATCH -e logs/test-srun-subset-N8-%j.e
+#SBATCH -t 0:30:00
+#SBATCH -p batch
+#SBATCH -N 8
+
+# Frontier User Guide: https://docs.olcf.ornl.gov/systems/frontier_user_guide.html
+
+set -x
+source /lustre/orion/proj-shared/stf006/irl1/conda/bin/activate
+conda activate /lustre/orion/stf006/proj-shared/irl1/FLASH_ATTENTION_BENCHMARKING/BASE_CONDA
+#source /lustre/orion/world-shared/stf218/sajal/miniconda3-frontier/bin/activate
+#conda activate /lustre/orion/world-shared/stf218/sajal/TORCH2/env-py310-rccl-megatron-new
+
+export LD_PRELOAD="/usr/lib64/libcrypto.so /usr/lib64/libssh.so.4 /usr/lib64/libssl.so.1.1"
+module load PrgEnv-gnu
+module load gcc/11.2.0
+module load rocm/5.4.0
+
+export HSA_DISABLE_CACHE=1
+
+export ROCM_HOME=/opt/rocm-5.4.0
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export NCCL_DEBUG=INFO
+# export settings
+export TORCH_EXTENSIONS_DIR=$PWD/deepspeed
+export HF_HOME=$PWD/hfdata
+
+# setup hostfile
+HOSTS=.hosts-job$SLURM_JOB_ID
+HOSTFILE=hostfile.txt
+srun hostname > $HOSTS
+sed 's/$/ slots=8/' $HOSTS > $HOSTFILE
+
+# setup env file
+echo "PATH=$PATH" > .deepspeed_env
+echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> .deepspeed_env
+echo "CPATH=$CPATH" >> .deepspeed_env
+echo "TORCH_EXTENSIONS_DIR=$PWD/deepspeed" >> .deepspeed_env
+echo "HF_HOME=$PWD/hfdata" >> .deepspeed_env
+echo "ROCM_HOME=/opt/rocm-5.4.0" >> .deepspeed_env
+
+# Configuration 
+export NNODES=$SLURM_JOB_NUM_NODES # e.g., 100 total nodes
+export NTOTGPUS=$(( $NNODES * 8 )) # e.g., 800 total GPUs
+export NGPUS_PER_TRAINING=$(( 8 * 4 )) # e.g., 32 GPUs per training
+export NTOT_DEEPHYPER_RANKS=$(( $NTOTGPUS / $NGPUS_PER_TRAINING )) # e.g., 25 total DH ranks
+export OMP_NUM_THREADS=4 # e.g., 8 threads per rank
+
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# DeepHyper variables
+export DEEPHYPER_LOG_DIR="deephyper-experiment"-$SLURM_JOB_ID 
+mkdir -p $DEEPHYPER_LOG_DIR
+export DEEPHYPER_DB_HOST=$HOST
+# Start Redis server (shared memory between search processes)
+# TODO: install Redis and set the `redis.conf` path here
+#export REDIS_CONF=...
+#pushd $DEEPHYPER_LOG_DIR
+#redis-server $REDIS_CONF &
+#popd
+
+
+export FLASH_ATTENTION_INTERNAL_DETERMINISTIC=0
+#when =1 not in performance mode, unit tests pass, worse performance
+#when =0 in performance mode, unit test fails, better performance
+export FLASH_ATTENTION_INTERNAL_UNIT_TEST_MODE=0
+
+
+# Safe sleep to let everything start
+sleep 5
+
+echo "Doing something"
+
+# Launch DeepHyper (1 rank per node, NTOT_DEEPHYPER_RANKS <= NNODES here)
+# meaning NGPUS_PER_TRAINING >= 8
+#$NTOT_DEEPHYPER_RANKS 
+#srun -N 1\
+#     --ntasks 1\
+#     --cpus-per-task $OMP_NUM_THREADS \
+#     --threads-per-core 1 \
+#     --cpu-bind threads \
+python main_dh_centralized.py 
+     #test_launch.py 
+     #main_dh_centralized.py
+     #test_launch.py 
+     #main_dh_centralized.py

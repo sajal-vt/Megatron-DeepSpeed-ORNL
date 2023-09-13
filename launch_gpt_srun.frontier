@@ -1,16 +1,17 @@
 #!/bin/bash
 
-#SBATCH -A STF218
+#SBATCH -A STF006
 #SBATCH -J gpt_megatron_4N
 #SBATCH -o logs/gpt_megatron_ds_4N_8x2-%j.o
 #SBATCH -e logs/gpt_megatron_ds_4N_8x2-%j.e
-#SBATCH -t 00:20:00
+#SBATCH -t 01:00:00
 #SBATCH -p batch
 #SBATCH -N 4
 
 set +x
-source /lustre/orion/world-shared/stf218/sajal/miniconda3/bin/activate
-conda activate /lustre/orion/world-shared/stf218/sajal/TORCH2/env-py310-rccl-megatron-new
+source /lustre/orion/proj-shared/stf006/irl1/conda/bin/activate
+#conda activate /lustre/orion/stf006/proj-shared/irl1/FLASH_ATTENTION_BENCHMARKING/BASE_CONDA
+conda activate /lustre/orion/stf006/proj-shared/irl1/FLASH_ATTENTION_BENCHMARKING/rebuild
 
 export LD_PRELOAD="/usr/lib64/libcrypto.so /usr/lib64/libssh.so.4 /usr/lib64/libssl.so.1.1"
 module load PrgEnv-gnu
@@ -69,14 +70,13 @@ mkdir logs/transformer
 export CHECKPOINT_PATH=checkpoints/gpt2_345m
 export VOCAB_FILE=gpt2-vocab.json
 export MERGE_FILE=gpt2-merges.txt
-#export DATA_PATH=/gpfs/alpine/world-shared/stf218/sajal/ptprofile/megatron/Megatron-LM/owt-data/openwebtext_train_text_document #gptdata/gpttext_article_document #my-gpt2_text_document
-export DATA_PATH=../gptdata/gpttext_article_document
+export DATA_PATH=/lustre/orion/world-shared/stf218/sajal/mtds/gptdata/gpttext_article_document
 
-export GPT_ARGS="--tensor-model-parallel-size 8 \
-          --pipeline-model-parallel-size 2 \
+export GPT_ARGS="--tensor-model-parallel-size 1 \
+          --pipeline-model-parallel-size 1 \
           --num-layers 24 \
-          --hidden-size 2064 \
-          --num-attention-heads 24 \
+          --hidden-size 2048 \
+          --num-attention-heads 32 \
           --seq-length 2048 \
           --max-position-embeddings 2048 \
           --micro-batch-size 2 \
@@ -98,6 +98,12 @@ export OUTPUT_ARGS="--log-interval 10 \
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export OMP_NUM_THREADS=1
 
+
+export FLASH_ATTENTION_INTERNAL_DETERMINISTIC=0
+#when =1 not in performance mode, unit tests pass, worse performance
+#when =0 in performance mode, unit test fails, better performance
+export FLASH_ATTENTION_INTERNAL_UNIT_TEST_MODE=0
+
 #time srun -u -n$ranks_total -c 2 --gpus-per-task=$gpus_per_rank --gpu-bind=closest bash -c "
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 time srun -u -n$ranks_total -c2 --ntasks-per-node=8 --gpus-per-node=8 --gpu-bind=closest bash -c "
@@ -110,10 +116,13 @@ python pretrain_gpt_deepspeed.py \
        --master-addr=$MASTER_ADDR \
        --data-path $DATA_PATH \
        --num-workers 0 \
-       --tensorboard-dir logs/profiles-with-zero-0 \
+       --tensorboard-dir logs/prof1 \
        --deepspeed \
        --zero-stage 0 \
-       --deepspeed_config ds_config.json
+       --use-flash-attn \
+       --deepspeed_config ds_config.json \
+       --deepspeed-activation-checkpointing \
+       --checkpoint-activations
 "
       # --master-addr=$MASTER_ADDR
 

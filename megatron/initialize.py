@@ -25,6 +25,7 @@ from deepspeed.accelerator import get_accelerator
 import deepspeed
 
 from mpi4py import MPI
+import socket
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
                         ignore_unknown_args=False, allow_no_cuda=False):
@@ -190,6 +191,10 @@ def _set_env_variables(args):
     rank = comm.Get_rank()
     world_size = comm.Get_size()
     master_addr = args.master_addr
+    if rank == 0:
+        hostname = socket.gethostname()
+        master_addr = socket.gethostbyname(hostname)
+    master_addr = comm.bcast(master_addr, root=0)
     
     proc_name = MPI.Get_processor_name()
     all_procs = comm.allgather(proc_name)

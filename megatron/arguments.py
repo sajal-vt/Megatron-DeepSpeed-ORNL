@@ -1243,6 +1243,9 @@ def _add_data_args(parser):
                        help='Force to use certain index file.')
     group.add_argument('--train-shuffle-idx-path', type=str, default=None,
                        help='Force to use certain index file.')
+    group.add_argument('--PROFILE', action='store_true', default=False,
+                       help='Profile training or not')
+
     return parser
 
 
