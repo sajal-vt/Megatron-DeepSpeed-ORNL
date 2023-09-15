@@ -79,9 +79,9 @@ export GPT_ARGS="--tensor-model-parallel-size 4 \
           --num-attention-heads 20 \
           --seq-length 2048 \
           --max-position-embeddings 2048 \
-  	  --micro-batch-size 1 \
-	  --global-batch-size 8 \
-	  --rampup-batch-size 4 2 1000 \
+  	  --micro-batch-size 4 \
+	  --global-batch-size 64 \
+	  --rampup-batch-size 16 16 1000 \
 	  --train-samples 100000 \
        	  --lr-decay-samples 10000 \
           --lr-warmup-samples 100 \
