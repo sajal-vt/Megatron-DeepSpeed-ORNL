@@ -47,17 +47,22 @@ def run_distributed_training(job, dequed=None):
     command,job_id = dh_utils.create_launch_command(prefix, params, job.id, dequed, DEEPHYPER_LOG_DIR) 
     print("Command = ", command)
     
-    result = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
-    #subprocess.run(command, shell=True, stderr=subprocess.STDOUT)
-    print("result =", result, flush=True)
-    output = "F"
-    samples = "F"
     try:
-        #output = _parse_results(result)
-        output, samples = _parse_results(job_id)
-    except Exception as excp:
-        print(excp)
+        result = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
+        #subprocess.run(command, shell=True, stderr=subprocess.STDOUT)
+        print("result =", result, flush=True)
         output = "F"
+        samples = "F"
+        try:
+            #output = _parse_results(result)
+            output, samples = _parse_results(job_id)
+        except Exception as excp:
+            print(excp)
+            output = "F"
+    except Exception as excp:
+        print(excp) 
+        ouput = "F"
+        samples = "F"
 
     print("Got the output", output)
     #output = 35.0
