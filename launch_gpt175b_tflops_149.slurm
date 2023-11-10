@@ -2,8 +2,8 @@
 
 #SBATCH -A STF218
 #SBATCH -J gpt175b_megatron
-#SBATCH -o logs/gpt175b_megatron_16N-%j.o
-#SBATCH -e logs/gpt175b_megatron_16N-%j.e
+#SBATCH -o logs/gpt175b_megatron_16N_newcomm-%j.o
+#SBATCH -e logs/gpt175b_megatron_16N_newcomm-%j.e
 #SBATCH -t 00:30:00
 #SBATCH -p batch
 #SBATCH -N 16
