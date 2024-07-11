@@ -1108,6 +1108,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     import torch.profiler
     from torch.profiler import tensorboard_trace_handler
     from torch.profiler import profile, record_function, ProfilerActivity
+    if not args.tensorboard_dir:
+        args.tensorboard_dir = "tensorboard_logs"
     with profile(
         #activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         profile_memory=True,
@@ -1141,7 +1143,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                            optimizer,
                            opt_param_scheduler,
                            config)
-            p.step()
+            #p.step()
             iteration += 1
             args.iteration = iteration
             new_samples = mpu.get_data_parallel_world_size() * \
