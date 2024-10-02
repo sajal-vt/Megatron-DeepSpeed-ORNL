@@ -14,6 +14,15 @@ conda activate /lustre/orion/stf006/world-shared/irl1/flash2
 #conda activate /lustre/orion/world-shared/stf218/sajal/flash2-copy
 module load rocm/5.7.0
 
+
+# For the plugin
+module load libtool
+module swap PrgEnv-cray PrgEnv-gnu
+module load rocm/$rocm_version
+module load craype-accel-amd-gfx90a
+module load gcc/12.2.0
+module load cray-mpich/8.1.27
+
 export ROCM_HOME=/opt/rocm-5.7.0
 
 export LD_PRELOAD="/usr/lib64/libcrypto.so /usr/lib64/libssh.so.4 /usr/lib64/libssl.so.1.1"
@@ -107,9 +116,9 @@ export OMP_NUM_THREADS=2
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
-export LD_LIBRARY_PATH=/lustre/orion/world-shared/stf218/sajal/software/aws-ofi-rccl/src/.libs/:${LD_LIBRARY_PATH}
-export NCCL_NET_GDR_LEVEL=3
-export FI_MR_CACHE_MONITOR=userfaultfd
+export LD_LIBRARY_PATH=opt/cray/libfabric/1.15.2.0/lib64:/lustre/orion/world-shared/stf218/sajal/rccl-plugin/aws-ofi-rccl/src/.libs/:/opt/rocm-5.7.0/lib:${LD_LIBRARY_PATH}
+#export NCCL_NET_GDR_LEVEL=3
+#export FI_MR_CACHE_MONITOR=userfaultfd
 
 time srun -u -n$ranks_total -c2 --ntasks-per-node=8 --gpus-per-node=8 --gpu-bind=closest python pretrain_gpt_deepspeed.py \
        $GPT_ARGS \
